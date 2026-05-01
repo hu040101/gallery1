@@ -1,286 +1,204 @@
 import { useState, useEffect } from 'react';
-import { getImages, deleteImage, updateImage, getGroups } from './store';
-import GroupManager from './GroupManager';
+import { getGroups, getImages, deleteImage, updateImage, deleteGroup, reorderGroups } from './store';
 import ImageCard from './ImageCard';
 import Lightbox from './Lightbox';
+import ImageUploader from './ImageUploader';
+import GroupManager from './GroupManager';
 import { IS_VIEWER } from './config';
 
-export default function Gallery({ country, refreshTrigger }) {
-  const [images, setImages] = useState([]);
+export default function Gallery({ countryId, countryName, onRefresh }) {
   const [groups, setGroups] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [activeGroupId, setActiveGroupId] = useState(null);
-  const [lightboxImage, setLightboxImage] = useState(null);
-  
-  // Batch Select State
-  const [isSelectMode, setIsSelectMode] = useState(false);
-  const [selectedImageIds, setSelectedImageIds] = useState([]);
-  
-  // Pagination State
+  const [images, setImages] = useState([]);
+  const [selectedGroupId, setSelectedGroupId] = useState(null); // null = All
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const ITEMS_PER_PAGE = 24;
+  const imagesPerPage = 12;
 
-  const fetchImagesAndGroups = async () => {
-    if (!country?.id) return;
-    setLoading(true);
-    
-    // Fetch groups to pass to ImageCard
-    const groupsData = await getGroups(country.id);
-    setGroups(groupsData);
+  useEffect(() => {
+    loadData();
+    setSelectedGroupId(null);
+    setCurrentPage(1);
+  }, [countryId]);
 
-    const data = await getImages(country.id);
-    
-    // Revoke old object URLs
-    images.forEach(img => {
-      // Don't revoke if it's currently in lightbox to avoid breaking it, but ideally we revoke all except active
-      if (img.url) URL.revokeObjectURL(img.url);
-    });
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedGroupId]);
 
-    const imagesWithUrls = data.map(img => {
-      let url = '';
-      try {
-        if (typeof img.file === 'string') {
-          url = img.file;
-        } else {
-          url = URL.createObjectURL(img.file);
-        }
-      } catch (e) {
-        console.error("Error creating URL for image", img, e);
-      }
-      return {
-        ...img,
-        url,
-        name: img.name || '未命名图片'
-      };
-    });    
-    imagesWithUrls.sort((a, b) => b.createdAt - a.createdAt);
-    setImages(imagesWithUrls);
-    setLoading(false);
+  const loadData = async () => {
+    const [g, i] = await Promise.all([
+      getGroups(countryId),
+      getImages(countryId)
+    ]);
+    setGroups(g);
+    setImages(i);
   };
 
-  useEffect(() => {
-    fetchImagesAndGroups();
-    // Reset selection, group selection, and pagination when country changes
-    setActiveGroupId(null);
-    setCurrentPage(1);
-    setIsSelectMode(false);
-    setSelectedImageIds([]);
-    return () => {
-      images.forEach(img => URL.revokeObjectURL(img.url));
-    };
-  }, [country?.id, refreshTrigger]);
+  const filteredImages = selectedGroupId 
+    ? images.filter(img => img.groupId === selectedGroupId)
+    : images;
 
-  // Clean up lightbox when navigating away
-  useEffect(() => {
-    setLightboxImage(null);
-  }, [country?.id]);
+  // Paginated images
+  const totalPages = Math.ceil(filteredImages.length / imagesPerPage);
+  const paginatedImages = filteredImages.slice(
+    (currentPage - 1) * imagesPerPage,
+    currentPage * imagesPerPage
+  );
 
-  const handleDelete = async (image) => {
-    try {
-      await deleteImage(country.id, image.id);
-      fetchImagesAndGroups();
-    } catch (err) {
-      console.error("Error deleting image:", err);
+  const handleDelete = async (id) => {
+    if (window.confirm('确定要删除这张照片吗？')) {
+      await deleteImage(countryId, id);
+      loadData();
     }
+  };
+
+  const handleUpdate = async (id, updates) => {
+    await updateImage(countryId, id, updates);
+    loadData();
+  };
+
+  const handleNext = () => {
+    const currentIndex = filteredImages.findIndex(img => img.id === selectedImage.id);
+    if (currentIndex < filteredImages.length - 1) {
+      setSelectedImage(filteredImages[currentIndex + 1]);
+    }
+  };
+
+  const handlePrev = () => {
+    const currentIndex = filteredImages.findIndex(img => img.id === selectedImage.id);
+    if (currentIndex > 0) {
+      setSelectedImage(filteredImages[currentIndex - 1]);
+    }
+  };
+
+  // Selection Logic
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
   };
 
   const handleBatchDelete = async () => {
-    if (selectedImageIds.length === 0) return;
-    if (!window.confirm(`Are you sure you want to delete ${selectedImageIds.length} selected images?`)) return;
-    
-    try {
-      for (const id of selectedImageIds) {
-        await deleteImage(country.id, id);
+    if (window.confirm(`确定要删除选中的 ${selectedIds.length} 张照片吗？`)) {
+      for (const id of selectedIds) {
+        await deleteImage(countryId, id);
       }
-      setSelectedImageIds([]);
-      setIsSelectMode(false);
-      fetchImagesAndGroups();
-    } catch (err) {
-      console.error("Error batch deleting:", err);
+      setSelectedIds([]);
+      setSelectionMode(false);
+      loadData();
     }
   };
 
-  const handleBatchMove = async (newGroupId) => {
-    if (selectedImageIds.length === 0) return;
-    const groupName = newGroupId === "" ? "Uncategorized" : groups.find(g => g.id === newGroupId)?.name;
-    if (!window.confirm(`Move ${selectedImageIds.length} selected images to ${groupName}?`)) return;
-
-    try {
-      for (const id of selectedImageIds) {
-        await updateImage(country.id, id, { groupId: newGroupId === "" ? null : newGroupId });
-      }
-      setSelectedImageIds([]);
-      setIsSelectMode(false);
-      fetchImagesAndGroups();
-    } catch (err) {
-      console.error("Error batch moving:", err);
+  const handleBatchMove = async (targetGroupId) => {
+    for (const id of selectedIds) {
+      await updateImage(countryId, id, { groupId: targetGroupId });
     }
+    setSelectedIds([]);
+    setSelectionMode(false);
+    loadData();
   };
-
-  const handleUpdate = async (image, updates) => {
-    try {
-      await updateImage(country.id, image.id, updates);
-      fetchImagesAndGroups();
-    } catch (err) {
-      console.error("Error updating image:", err);
-    }
-  };
-
-  const displayedImages = activeGroupId 
-    ? images.filter(img => img.groupId === activeGroupId)
-    : images;
-
-  // Pagination Logic
-  const totalPages = Math.ceil(displayedImages.length / ITEMS_PER_PAGE);
-  const paginatedImages = displayedImages.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE, 
-    currentPage * ITEMS_PER_PAGE
-  );
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2>{country.name}</h2>
-        {!IS_VIEWER && (
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {isSelectMode && (
-              <button 
-                className="sidebar-btn" 
-                onClick={() => {
-                  if (selectedImageIds.length === displayedImages.length) {
-                    // Deselect all
-                    setSelectedImageIds([]);
-                  } else {
-                    // Select all displayed
-                    setSelectedImageIds(displayedImages.map(img => img.id));
-                  }
-                }}
-                style={{ width: 'auto', background: 'rgba(255,255,255,0.4)', color: 'var(--text-color)' }}
-              >
-                {selectedImageIds.length === displayedImages.length ? 'Deselect All' : 'Select All'}
-              </button>
-            )}
-            <button 
-              className="sidebar-btn" 
-              onClick={() => {
-                setIsSelectMode(!isSelectMode);
-                setSelectedImageIds([]);
-              }}
-              style={{ width: 'auto', background: isSelectMode ? 'var(--accent-color)' : 'rgba(255,255,255,0.4)', color: isSelectMode ? 'white' : 'var(--text-color)' }}
-            >
-              {isSelectMode ? 'Cancel Selection' : 'Select Photos'}
-            </button>
-          </div>
-        )}
-      </div>
-
-      <GroupManager 
-        countryId={country.id}
-        activeGroupId={activeGroupId}
-        onSelectGroup={(id) => {
-          setActiveGroupId(id);
-          setCurrentPage(1); // Reset page on category change
-        }}
-        onGroupsChanged={fetchImagesAndGroups}
-      />
-
-
-
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '3rem' }}><div className="loading-spinner"></div></div>
-      ) : displayedImages.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-          {IS_VIEWER ? "No images in this region yet." : "No images found. Upload one above!"}
-        </div>
-      ) : (
-        <>
-          <div className="gallery-grid">
-            {paginatedImages.map(img => (
-              <ImageCard 
-                key={img.id} 
-                image={img} 
-                country={country}
-                groups={groups}
-                onDelete={handleDelete}
-                onUpdate={handleUpdate}
-                onImageClick={setLightboxImage}
-                isSelectMode={isSelectMode}
-                isSelected={selectedImageIds.includes(img.id)}
-                onToggleSelect={(id) => {
-                  setSelectedImageIds(prev => 
-                    prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-                  );
-                }}
-              />
-            ))}
-          </div>
-
-          {totalPages > 1 && (
-            <div className="pagination-controls">
-              <button 
-                className="pagination-btn" 
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-              >
-                &lt; 上一页
-              </button>
-              
-              <span className="pagination-info">
-                第 {currentPage} / {totalPages} 页
-              </span>
-
-              <button 
-                className="pagination-btn" 
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-              >
-                下一页 &gt;
-              </button>
+    <div className="gallery-container">
+      <header className="gallery-header glass-panel">
+        <div className="header-top">
+          <h1>{countryName}</h1>
+          
+          {/* Management Controls - Hidden in Viewer Mode */}
+          {!IS_VIEWER && (
+            <div className="header-actions">
+              {selectionMode ? (
+                <div className="batch-actions">
+                  <span className="selection-count">已选 {selectedIds.length} 项</span>
+                  <select 
+                    onChange={(e) => handleBatchMove(e.target.value)}
+                    className="batch-select"
+                    defaultValue=""
+                  >
+                    <option value="" disabled>移动到分类...</option>
+                    <option value="">全部图片</option>
+                    {groups.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                  <button className="batch-btn delete" onClick={handleBatchDelete} disabled={selectedIds.length === 0}>删除</button>
+                  <button className="batch-btn cancel" onClick={() => { setSelectionMode(false); setSelectedIds([]); }}>取消</button>
+                </div>
+              ) : (
+                <button className="selection-toggle-btn" onClick={() => setSelectionMode(true)}>
+                  批量管理
+                </button>
+              )}
             </div>
           )}
-        </>
+        </div>
+        
+        <GroupManager 
+          countryId={countryId}
+          groups={groups}
+          selectedGroupId={selectedGroupId}
+          onSelect={setSelectedGroupId}
+          onRefresh={loadData}
+        />
+      </header>
+
+      {/* Upload button - Hidden in Viewer Mode */}
+      {!IS_VIEWER && (
+        <ImageUploader 
+          countryId={countryId} 
+          groupId={selectedGroupId} 
+          onImageAdded={loadData} 
+        />
       )}
 
-      {/* Batch Action Bar */}
-      {!IS_VIEWER && isSelectMode && selectedImageIds.length > 0 && (
-        <div className="batch-action-bar">
-          <span>{selectedImageIds.length} Selected</span>
-          <button className="danger" onClick={handleBatchDelete}>Delete</button>
-          
-          <select 
-            onChange={(e) => {
-              if (e.target.value !== 'prompt') {
-                handleBatchMove(e.target.value);
-                e.target.value = 'prompt'; // reset select after action
-              }
-            }}
-            defaultValue="prompt"
+      <div className="image-grid">
+        {paginatedImages.map(img => (
+          <ImageCard 
+            key={img.id} 
+            image={img} 
+            groups={groups}
+            onDelete={() => handleDelete(img.id)}
+            onUpdate={(updates) => handleUpdate(img.id, updates)}
+            onClick={() => setSelectedImage(img)}
+            isSelectionMode={selectionMode}
+            isSelected={selectedIds.includes(img.id)}
+            onSelect={() => toggleSelect(img.id)}
+          />
+        ))}
+      </div>
+
+      {totalPages > 1 && (
+        <div className="pagination glass-panel">
+          <button 
+            disabled={currentPage === 1} 
+            onClick={() => setCurrentPage(p => p - 1)}
+            className="pagination-btn"
           >
-            <option value="prompt" disabled>Move to...</option>
-            <option value="">None (Uncategorized)</option>
-            {groups.map(g => (
-              <option key={g.id} value={g.id}>{g.name}</option>
-            ))}
-          </select>
+            上一页
+          </button>
+          <span className="pagination-info">
+            第 {currentPage} 页 / 共 {totalPages} 页
+          </span>
+          <button 
+            disabled={currentPage === totalPages} 
+            onClick={() => setCurrentPage(p => p + 1)}
+            className="pagination-btn"
+          >
+            下一页
+          </button>
         </div>
       )}
 
-      {/* Lightbox Overlay */}
-      {lightboxImage && (
+      {selectedImage && (
         <Lightbox 
-          image={lightboxImage} 
-          images={displayedImages}
-          onClose={() => setLightboxImage(null)} 
-          onNext={() => {
-            const idx = displayedImages.findIndex(img => img.id === lightboxImage.id);
-            const nextIdx = (idx + 1) % displayedImages.length;
-            setLightboxImage(displayedImages[nextIdx]);
-          }}
-          onPrev={() => {
-            const idx = displayedImages.findIndex(img => img.id === lightboxImage.id);
-            const prevIdx = (idx - 1 + displayedImages.length) % displayedImages.length;
-            setLightboxImage(displayedImages[prevIdx]);
-          }}
+          image={selectedImage} 
+          images={filteredImages}
+          onClose={() => setSelectedImage(null)}
+          onNext={handleNext}
+          onPrev={handlePrev}
         />
       )}
     </div>
