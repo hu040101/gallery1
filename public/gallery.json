@@ -5,22 +5,13 @@
   "groups": [],
   "images": [
     {
-      "id": "img1",
+      "id": "img_dsc_e3953",
       "countryId": "japan",
       "groupId": null,
-      "url": "gallery/japan/R0000475 - 副本.JPG",
-      "name": "日本照片 1",
-      "note": "摄于日本",
-      "createdAt": 1714560000001
-    },
-    {
-      "id": "img2",
-      "countryId": "japan",
-      "groupId": null,
-      "url": "gallery/japan/R000E0517.JPG",
-      "name": "日本照片 2",
-      "note": "摄于日本",
-      "createdAt": 1714560000002
+      "url": "gallery/japan/DSC_E3953.JPG",
+      "name": "日本照片 - DSC_E3953",
+      "note": "新上传的照片",
+      "createdAt": 1714618149000
     }
   ],
   "settings": {
